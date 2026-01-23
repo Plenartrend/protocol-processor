@@ -1,4 +1,4 @@
-module protocol-processor
+module plenartrend/protocol-processor
 
 go 1.25.5
 
