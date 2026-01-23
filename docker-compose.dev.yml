@@ -11,19 +11,3 @@ services:
       - postgres
     extra_hosts:
       - "host.docker.internal:host-gateway"
-
-
-  postgres:
-    image: postgres:17.6-alpine
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data_dev:/var/lib/postgresql/data
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-Postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-Plenartrend}
-
-volumes:
-  postgres_data_dev:
-    name: plenartrend_postgres_data_dev
