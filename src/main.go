@@ -38,17 +38,21 @@ var assignSpeechesToActivitiesWorkerRunning = false
 var model ModelInterface = &GeminiModel{}
 
 func main() {
-
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
 
-	db, err := sqlx.Connect("postgres", os.Getenv("DATABASE_URL"))
-	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+	var db *sqlx.DB
+	for true {
+		db, err = sqlx.Connect("postgres", os.Getenv("DATABASE_URL"))
+		if err == nil {
+			defer db.Close()
+			break
+		}
+		log.Printf("Failed to connect to database: %v", err)
+		time.Sleep(time.Second)
 	}
-	defer db.Close()
 
 	err = model.Initialize(NewLogger(db, nil, nil))
 	if err != nil {
