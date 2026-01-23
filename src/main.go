@@ -59,6 +59,8 @@ func main() {
 		log.Fatalf("Failed to initialize model: %v", err)
 	}
 
+	var assignSpeechesToActivitiesWorkerRunning = os.Getenv("BEGIN_PROCESSING_ON_STARTUP") == "true"
+
 	activitiesTextsChan = make(chan ActivitiesTexts)
 
 	for i := 0; i < 16; i++ {
@@ -67,7 +69,8 @@ func main() {
 			workerPrefix := fmt.Sprintf("Worker %d", workerId)
 			fmt.Fprintf(os.Stdout, "Worker %d started\n", workerId)
 			logger := NewLogger(db, nil, nil, workerPrefix)
-			for count < 1 {
+
+			for true {
 				if !assignSpeechesToActivitiesWorkerRunning {
 					time.Sleep(1 * time.Second)
 					continue
@@ -95,15 +98,10 @@ func main() {
 		fmt.Fprint(w, "Server healthy")
 	})
 
-	http.HandleFunc("/process-protocols", func(w http.ResponseWriter, r *http.Request) {
-		start := r.URL.Query().Get("start") == "true"
-		if start {
-			assignSpeechesToActivitiesWorkerRunning = true
-		} else {
-			assignSpeechesToActivitiesWorkerRunning = false
-		}
+	http.HandleFunc("/control-processing", func(w http.ResponseWriter, r *http.Request) {
+		assignSpeechesToActivitiesWorkerRunning = r.URL.Query().Get("start") == "true"
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "Speeches assignment status updated with start="+strconv.FormatBool(start))
+		fmt.Fprint(w, "Speeches assignment status updated with start="+strconv.FormatBool(assignSpeechesToActivitiesWorkerRunning))
 	})
 
 	http.HandleFunc("/process-single-protocol", func(w http.ResponseWriter, r *http.Request) {

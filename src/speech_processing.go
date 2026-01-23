@@ -273,6 +273,7 @@ func processNextProtocol(logger *Logger) (bool, error) {
 					AND (now() - p.processing_timestamp > interval '1 hour')
 				)
 			AND p.text IS NOT NULL AND p.text != '' AND p.text != '[NoTextAvailable]' AND length(p.text) > 1000
+			AND p.date >= $1 AND p.date <= $2 -- NOTE: We do not reprocess protocols if the text has changed!
 			ORDER BY p.date DESC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
