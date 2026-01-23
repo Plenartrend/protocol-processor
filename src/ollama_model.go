@@ -167,12 +167,12 @@ func convertGenaiSchemaProperty(schema *genai.Schema) map[string]any {
 	}
 
 	// Convert required fields
-	if schema.Required != nil && len(schema.Required) > 0 {
+	if len(schema.Required) > 0 {
 		result["required"] = schema.Required
 	}
 
 	// Convert properties (for nested objects)
-	if schema.Properties != nil && len(schema.Properties) > 0 {
+	if len(schema.Properties) > 0 {
 		properties := make(map[string]any)
 		for key, prop := range schema.Properties {
 			if prop != nil {
