@@ -109,13 +109,13 @@ func (l *Logger) Fatal(message string) {
 	}
 	if l.minConsoleLevel <= Fatal {
 		fmt.Println("FATAL: ", formattedMessage)
-		panic(message)
 	}
+	panic(message)
 }
 
 func (l *Logger) Log(status string, message string) {
 	_, err := l.db.Exec("INSERT INTO logs (timestamp, status, message) VALUES (NOW(), $1, $2)", status, message)
 	if err != nil {
-		log.Printf("ERROR:Failed to write log to database: %v", err)
+		log.Printf("ERROR: Failed to write log to database: %v", err)
 	}
 }

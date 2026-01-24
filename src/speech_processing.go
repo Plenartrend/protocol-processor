@@ -235,22 +235,24 @@ func processSingleProtocol(protocolId int) error {
 	return nil
 }
 
-func getUnassignedSpeechesCount(protocolId int, db DBInterface, logger *Logger) (float32, error) {
-	var ratio float32
+func getUnassignedSpeechesCount(protocolId int, db DBInterface, logger *Logger) (float64, error) {
+	var ratio sql.NullFloat64
 	err := db.Get(&ratio, `
 		SELECT
-			COUNT(*) FILTER (WHERE a.text = '')::float / COUNT(*)::float AS unassigned_rate
+			COUNT(*) FILTER (WHERE a.text = '')::float / NULLIF(COUNT(*)::float, 0)
 		FROM protocols p
 			JOIN activities a ON a.protocol_id = p.id
-		WHERE p.processing_status = 'completed' AND p.id = $1
+		WHERE p.id = $1
 			AND a.type like 'Rede%'
 	`, protocolId)
 
 	if err != nil {
 		logger.Error(fmt.Sprintf("failed to get unassigned speeches count for protocol %d: %v", protocolId, err))
 		return 0, fmt.Errorf("failed to get unassigned speeches count for protocol %d: %w", protocolId, err)
+	} else if !ratio.Valid {
+		return 0, fmt.Errorf("no speeches found for protocol %d", protocolId)
 	}
-	return ratio, nil
+	return ratio.Float64, nil
 }
 
 func processNextProtocol(logger *Logger) (bool, error) {
@@ -270,14 +272,14 @@ func processNextProtocol(logger *Logger) (bool, error) {
 			SELECT p.id
 			FROM protocols p
 			WHERE
-				(
-					EXISTS (
-						SELECT 1
-						FROM activities a
-						WHERE a.protocol_id = p.id AND (a.text IS NULL OR a.text = '') AND (a.type = 'Rede' OR a.type = 'Rede (zu Protokoll gegeben)')
-					)
-						AND p.processing_status = 'not_started'
-					)
+			((
+				EXISTS (
+					SELECT 1
+					FROM activities a
+					WHERE a.protocol_id = p.id AND (a.text IS NULL OR a.text = '') AND (a.type = 'Rede' OR a.type = 'Rede (zu Protokoll gegeben)')
+				)
+					AND p.processing_status = 'not_started'
+				)
 			OR (
 				p.processing_status = 'failed'
 					AND (
@@ -291,17 +293,16 @@ func processNextProtocol(logger *Logger) (bool, error) {
 			OR (
 				p.processing_status = 'in_progress'
 					AND (now() - p.processing_timestamp > interval '1 hour')
-				)
+			))
 			AND p.text IS NOT NULL AND p.text != '' AND p.text != '[NoTextAvailable]' AND length(p.text) > 1000
-			AND p.date >= COALESCE($1, '1900-01-01') AND p.date <= COALESCE($2, '9999-12-31') -- NOTE: We currently NEVER reprocess protocols!
+			AND p.date >= $1 AND p.date <= $2  -- NOTE: We currently NEVER reprocess protocols!
 			ORDER BY p.date DESC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
 		)
 		UPDATE protocols p
 		SET processing_status = 'in_progress', 
-			processing_timestamp = now(),
-			attempts_count = attempts_count + 1
+			processing_timestamp = now()
 		FROM to_update t
 		WHERE p.id = t.id
 		RETURNING p.*;
@@ -311,9 +312,17 @@ func processNextProtocol(logger *Logger) (bool, error) {
 		if err != nil {
 			logger.Error(fmt.Sprintf("failed to update protocol %d: %v", protocolID, err))
 		}
+		_, err = db.Exec(`
+			UPDATE protocols
+			SET processing_status = 'failed', attempts_count = attempts_count + 1
+			WHERE id = $1
+		`, protocolID)
+		if err != nil {
+			logger.Error(fmt.Sprintf("failed to update protocol %d: %v", protocolID, err))
+		}
 	}
 
-	err = db.Select(&protocols, query, os.Getenv("PROCESS_START_DATE"), os.Getenv("PROCESS_END_DATE"))
+	err = db.Select(&protocols, query, START_DATE, END_DATE)
 	if err != nil {
 		logger.Error(fmt.Sprintf("failed to select protocols: %v", err))
 		return true, fmt.Errorf("failed to select protocols: %w", err)
@@ -333,9 +342,9 @@ func processNextProtocol(logger *Logger) (bool, error) {
 		defer tx.Rollback()
 
 		chunkSize := 50_000
-		if protocol.AttemptsCount == 2 {
+		if protocol.AttemptsCount == 1 {
 			chunkSize = 25_000 //Attempt smaller chunksSize
-		} else if protocol.AttemptsCount == 3 {
+		} else if protocol.AttemptsCount == 2 {
 			chunkSize = 75_000 //Attempt larger chunksSize
 		}
 
@@ -346,17 +355,29 @@ func processNextProtocol(logger *Logger) (bool, error) {
 			continue
 		}
 
-		var count int
-		err = db.Get(&count, "SELECT COUNT(*) FROM activities a WHERE a.protocol_id = $1 AND (a.type = 'Rede' OR a.type = 'Rede (zu Protokoll gegeben)') AND (a.text IS NULL OR a.text = '')", protocol.ID)
+		unassignedRatio, err := getUnassignedSpeechesCount(protocol.ID, tx, logger)
 		if err != nil {
-			err = fmt.Errorf("failed to check remaining speeches: %w", err)
+			err = fmt.Errorf("failed to get unassigned speeches count: %w", err)
 			handleError(protocol.ID, err, logger)
 			continue
 		}
-		if count > 0 {
-			logger.Warn(fmt.Sprintf("There are still %d speeches without text for protocol %d", count, protocol.ID))
+
+		var newProcessingStatus string = "completed"
+
+		if (protocol.AttemptsCount < 2 && unassignedRatio > ACCEPTABLE_UNASSIGNED_SPEECH_RATIO) ||
+			(protocol.AttemptsCount == 2 && unassignedRatio > 2*ACCEPTABLE_UNASSIGNED_SPEECH_RATIO) {
+			logger.Warn(fmt.Sprintf("Unassigned speeches ratio %.2f exceeds acceptable limit for protocol %d (attempt %d)", unassignedRatio, protocol.ID, protocol.AttemptsCount))
+			newProcessingStatus = "failed"
+		} else if time.Since(protocol.ProcessingTimestamp.Time) > time.Hour-5*time.Minute {
+			newProcessingStatus = "failed"
 		} else {
-			logger.Info(fmt.Sprintf("All speeches have been assigned for protocol %d", protocol.ID))
+			logger.Info(fmt.Sprintf("Successfully processed speeches for protocol %d", protocol.ID))
+		}
+
+		_, err = tx.Exec("UPDATE protocols SET processing_status = $1, attempts_count = attempts_count + 1 WHERE id = $2", newProcessingStatus, protocol.ID)
+		if err != nil {
+			logger.Error(fmt.Sprintf("failed to set processed protocol %d to %s: %v", protocol.ID, newProcessingStatus, err))
+			continue
 		}
 
 		err = tx.Commit()
@@ -366,27 +387,16 @@ func processNextProtocol(logger *Logger) (bool, error) {
 			continue
 		}
 
-		unassignedRatio, err := getUnassignedSpeechesCount(protocol.ID, db, logger)
+		var count int
+		err = db.Get(&count, "SELECT COUNT(*) FROM activities a WHERE a.protocol_id = $1 AND (a.type = 'Rede' OR a.type = 'Rede (zu Protokoll gegeben)') AND (a.text IS NULL OR a.text = '')", protocol.ID)
 		if err != nil {
-			err = fmt.Errorf("failed to get unassigned speeches count: %w", err)
-			handleError(protocol.ID, err, logger)
+			logger.Error(fmt.Sprintf("failed to check remaining speeches: %v", err))
 			continue
 		}
-
-		var newProcessingStatus string = "completed"
-
-		if (protocol.AttemptsCount < 3 && unassignedRatio > ACCEPTABLE_UNASSIGNED_SPEECH_RATIO) ||
-			(protocol.AttemptsCount == 3 && unassignedRatio > 2*ACCEPTABLE_UNASSIGNED_SPEECH_RATIO) {
-			logger.Warn(fmt.Sprintf("Unassigned speeches ratio %.2f exceeds acceptable limit for protocol %d (attempt %d)", unassignedRatio, protocol.ID, protocol.AttemptsCount))
-			newProcessingStatus = "failed"
+		if count > 0 {
+			logger.Info(fmt.Sprintf("There are still %d speeches without text for protocol %d", count, protocol.ID))
 		} else {
-			logger.Info(fmt.Sprintf("Successfully processed speeches for protocol %d", protocol.ID))
-		}
-
-		_, err = db.Exec("UPDATE protocols SET processing_status = $1 WHERE id = $2", newProcessingStatus, protocol.ID)
-		if err != nil {
-			logger.Error(fmt.Sprintf("failed to set processed protocol %d to %s: %v", protocol.ID, newProcessingStatus, err))
-			continue
+			logger.Info(fmt.Sprintf("All speeches have been assigned for protocol %d", protocol.ID))
 		}
 	}
 	return len(protocols) == 0, nil

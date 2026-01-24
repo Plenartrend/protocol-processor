@@ -37,6 +37,17 @@ var assignSpeechesToActivitiesWorkerRunning = false
 
 var model ModelInterface = &GeminiModel{}
 
+func getDateOrDefault(dateStr string, defaultTime time.Time) (time.Time, error) {
+	if dateStr == "" {
+		return defaultTime, nil
+	}
+	parsedDate, err := time.Parse(time.RFC3339, dateStr)
+	return parsedDate, err
+}
+
+var START_DATE = time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
+var END_DATE = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+
 func main() {
 	err := godotenv.Load()
 	if err != nil {
@@ -54,23 +65,41 @@ func main() {
 		time.Sleep(time.Second)
 	}
 
-	err = model.Initialize(NewLogger(db, nil, nil))
+	var mainLogger = NewLogger(db, nil, nil)
+	err = model.Initialize(mainLogger)
 	if err != nil {
-		log.Fatalf("Failed to initialize model: %v", err)
+		mainLogger.Fatal(fmt.Sprintf("Failed to initialize model: %v", err))
+	}
+
+	START_DATE, err = getDateOrDefault(os.Getenv("PROCESS_START_DATE"), START_DATE)
+	if err != nil {
+		mainLogger.Error(fmt.Sprintf("failed to parse PROCESS_START_DATE: %v", err))
+		return
+	}
+
+	END_DATE, err = getDateOrDefault(os.Getenv("PROCESS_END_DATE"), END_DATE)
+	if err != nil {
+		mainLogger.Error(fmt.Sprintf("failed to parse PROCESS_END_DATE: %v", err))
+		return
 	}
 
 	var assignSpeechesToActivitiesWorkerRunning = os.Getenv("BEGIN_PROCESSING_ON_STARTUP") == "true"
 
 	activitiesTextsChan = make(chan ActivitiesTexts)
 
-	for i := 0; i < 16; i++ {
+	workerCount, err := strconv.Atoi(os.Getenv("NUM_WORKERS"))
+	if err != nil {
+		mainLogger.Fatal(fmt.Sprintf("Invalid NUM_WORKERS value: %v", err))
+	}
+
+	for i := 0; i < workerCount; i++ {
 		go func(workerId int) {
 			count := 0
 			workerPrefix := fmt.Sprintf("Worker %d", workerId)
 			fmt.Fprintf(os.Stdout, "Worker %d started\n", workerId)
 			logger := NewLogger(db, nil, nil, workerPrefix)
 
-			for true {
+			for {
 				if !assignSpeechesToActivitiesWorkerRunning {
 					time.Sleep(1 * time.Second)
 					continue
@@ -85,10 +114,6 @@ func main() {
 					time.Sleep(1 * time.Minute)
 					fmt.Fprintf(os.Stdout, "Worker %d sleeping for 1 minute\n", workerId)
 				}
-			}
-			for {
-				fmt.Fprintf(os.Stdout, "Worker %d finished\n", workerId)
-				time.Sleep(1 * time.Minute)
 			}
 		}(i)
 	}
