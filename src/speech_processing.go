@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -15,6 +16,18 @@ type PreviouslyUnfinishedSpeech struct {
 	Speaker           string
 	SpeechStart       string
 	BeginningTooShort bool
+}
+
+type LLMError struct {
+	Err error
+}
+
+func (e *LLMError) Error() string {
+	return fmt.Sprintf("LLM error: %v", e.Err)
+}
+
+func (e *LLMError) Unwrap() error {
+	return e.Err
 }
 
 const ACCEPTABLE_UNASSIGNED_SPEECH_RATIO = 0.2
@@ -138,11 +151,12 @@ func processSpeeches(protocol *Protocol, chunkSize *int, db DBInterface, logger 
 
 		response, err := model.GenerateContent(query, logger)
 		if err != nil {
-			logger.Error(fmt.Sprintf("failed to generate content; retrying once: %v", err))
+			logger.Error(fmt.Sprintf("failed to generate content; retrying once in 1 minute: %v", err))
+			time.Sleep(1 * time.Minute)
 			response, err = model.GenerateContent(query, logger)
 			if err != nil {
-				logger.Error(fmt.Sprintf("failed to generate content: %v", err))
-				return fmt.Errorf("failed to generate content: %w", err)
+				logger.Error(fmt.Sprintf("failed to generate content after retry: %v", err))
+				return &LLMError{Err: fmt.Errorf("failed to generate content: %w", err)}
 			}
 		}
 
@@ -219,7 +233,13 @@ func processSingleProtocol(protocolId int) error {
 	defer tx.Rollback()
 
 	err = processSpeeches(&protocol, nil, tx, logger)
+
 	if err != nil {
+		var llmErr *LLMError
+		if errors.As(err, &llmErr) {
+			logger.Error(fmt.Sprintf("LLM error while processing protocol %d: %v", protocol.ID, llmErr))
+			return fmt.Errorf("LLM error while processing protocol %d: %w", protocol.ID, llmErr)
+		}
 		logger.Error(fmt.Sprintf("failed to process speeches: %v", err))
 		return fmt.Errorf("failed to process speeches: %w", err)
 	}
@@ -350,6 +370,11 @@ func processNextProtocol(logger *Logger) (bool, error) {
 
 		err = processSpeeches(&protocol, &chunkSize, tx, logger)
 		if err != nil {
+			var llmErr *LLMError
+			if errors.As(err, &llmErr) && protocol.AttemptsCount > 0 { //After first attempt with llm error we retry with smaller chunksize; too large chunks may have been an issue for the llm. If it still fails, however, it does not count as attempt.
+				logger.Error(fmt.Sprintf("LLM error while processing protocol %d: %v. Leaving protocol as in_progress without incrementing attempts; will be retried later.", protocol.ID, llmErr))
+				continue
+			}
 			err = fmt.Errorf("failed to process speeches: %w", err)
 			handleError(protocol.ID, err, logger)
 			continue
