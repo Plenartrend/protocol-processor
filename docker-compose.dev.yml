@@ -4,25 +4,14 @@ services:
     build:
       dockerfile: dockerfile.dev
     ports:
-      - "8080:8080"
+      - "8081:8080"
     volumes:
       - ./:/app/
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on:
-      - postgres
+    networks:
+      - plenartrend_network
 
-  postgres:
-    image: postgres:17.6-alpine
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data_dev:/var/lib/postgresql/data
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-Postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-Plenartrend}
-
-volumes:
-  postgres_data_dev:
-    name: plenartrend_postgres_data_dev
+networks:
+  plenartrend_network:
+    name: plenartrend_network
