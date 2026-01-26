@@ -1,0 +1,55 @@
+name: "Deploy Protocol Processor Docker Image to Nexus"
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  push_to_registry:
+    name: Push Docker image to Nexus
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Log in to Nexus Docker registry
+        uses: docker/login-action@v3
+        with:
+          registry: registry.sokutan.de
+          username: ${{ secrets.NEXUS_USERNAME }}
+          password: ${{ secrets.NEXUS_PASSWORD }}
+
+      - name: Build and push Docker image protocol processor
+        uses: docker/build-push-action@v6
+        with:
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: registry.sokutan.de/plenartrend/protocol-processor:${{ github.sha }}
+
+      - name: Setup SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.ARGO_SSH_PRIVATE_KEY }}
+
+      - name: Clone manifests repository
+        run: |
+          git clone git@github.com:Plenartrend/infrastructure.git manifests-repo
+          cd manifests-repo
+          git config user.name "GitHub Actions Protocol Processor"
+          git config user.email "actions@github.com"
+
+      - name: Update deployment manifest
+        run: |
+          cd manifests-repo
+          IMAGE_TAG="${{ github.sha }}"
+          sed -i "s|image: registry.sokutan.de/plenartrend/protocol-processor:.*|image: registry.sokutan.de/plenartrend/protocol-processor:${IMAGE_TAG}|" manifests/protocol-processor/protocol-processor-deployment.yml
+
+      - name: Commit and push changes
+        run: |
+          cd manifests-repo
+          git add manifests/protocol-processor/protocol-processor-deployment.yml
+          git commit -m "Update protocol processor deployment to ${{ github.sha }}" || exit 0
+          git push origin main
