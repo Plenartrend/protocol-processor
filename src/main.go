@@ -50,13 +50,16 @@ func getDateOrDefault(dateStr string, defaultTime time.Time) (time.Time, error) 
 var START_DATE = time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
 var END_DATE = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
 
+var logLevel LogStatus
+var serviceLogPrefix = "Protocol Processing"
+
 func buildDatabaseURL() (string, error) {
 	requiredVars := map[string]string{
 		"DATABASE_USER":     os.Getenv("DATABASE_USER"),
 		"DATABASE_PASSWORD": os.Getenv("DATABASE_PASSWORD"),
-		"DATABASE_HOST":    os.Getenv("DATABASE_HOST"),
-		"DATABASE_PORT":    os.Getenv("DATABASE_PORT"),
-		"DATABASE_NAME":    os.Getenv("DATABASE_NAME"),
+		"DATABASE_HOST":     os.Getenv("DATABASE_HOST"),
+		"DATABASE_PORT":     os.Getenv("DATABASE_PORT"),
+		"DATABASE_NAME":     os.Getenv("DATABASE_NAME"),
 	}
 
 	var missingVars []string
@@ -94,6 +97,16 @@ func main() {
 		log.Fatalf("Failed to build database URL: %v", err)
 	}
 
+	logLevel, err = GetLogLevel(os.Getenv("LOG_LEVEL"))
+	if err != nil {
+		log.Fatalf("Failed to get log level: %v", err)
+	}
+
+	logLevel, err = GetLogLevel(os.Getenv("LOG_LEVEL"))
+	if err != nil {
+		log.Fatalf("Failed to get log level: %v", err)
+	}
+
 	var db *sqlx.DB
 	for true {
 		db, err = sqlx.Connect("postgres", databaseURL)
@@ -105,7 +118,7 @@ func main() {
 		time.Sleep(time.Second)
 	}
 
-	var mainLogger = NewLogger(db, nil, nil)
+	var mainLogger = NewLogger(db, &logLevel, &logLevel, serviceLogPrefix)
 	err = model.Initialize(mainLogger)
 	if err != nil {
 		mainLogger.Fatal(fmt.Sprintf("Failed to initialize model: %v", err))
@@ -135,9 +148,10 @@ func main() {
 	for i := 0; i < workerCount; i++ {
 		go func(workerId int) {
 			count := 0
-			workerPrefix := fmt.Sprintf("Worker %d", workerId)
+			workerPrefix := fmt.Sprintf("%s - Worker %d", serviceLogPrefix, workerId)
 			fmt.Fprintf(os.Stdout, "Worker %d started\n", workerId)
-			logger := NewLogger(db, nil, nil, workerPrefix)
+
+			logger := NewLogger(db, &logLevel, &logLevel, workerPrefix)
 
 			for {
 				if !assignSpeechesToActivitiesWorkerRunning {

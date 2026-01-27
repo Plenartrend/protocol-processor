@@ -219,7 +219,7 @@ func processSingleProtocol(protocolId int) error {
 	}
 	defer db.Close()
 	loggerLevel := Debug
-	logger := NewLogger(db, &loggerLevel, &loggerLevel)
+	logger := NewLogger(db, &loggerLevel, &loggerLevel, serviceLogPrefix)
 	logger.AppendPrefix(fmt.Sprintf("protocol %d", protocolId))
 
 	var protocol Protocol
@@ -290,7 +290,7 @@ func processNextProtocol(logger *Logger) (bool, error) {
 	defer db.Close()
 
 	if logger == nil {
-		logger = NewLogger(db, nil, nil)
+		logger = NewLogger(db, &logLevel, &logLevel, serviceLogPrefix)
 	}
 
 	var protocols []Protocol

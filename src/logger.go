@@ -24,8 +24,9 @@ type Logger struct {
 	prefix           string
 }
 
+var defaultLevel = Info
+
 func NewLogger(db *sqlx.DB, minConsoleLevel *LogStatus, minDatabaseLevel *LogStatus, prefix ...string) *Logger {
-	defaultLevel := Info
 	if minConsoleLevel == nil {
 		minConsoleLevel = &defaultLevel
 	}
@@ -36,7 +37,9 @@ func NewLogger(db *sqlx.DB, minConsoleLevel *LogStatus, minDatabaseLevel *LogSta
 	if len(prefix) > 0 && prefix[0] != "" {
 		loggerPrefix = prefix[0]
 	}
-	return &Logger{db: db, minConsoleLevel: *minConsoleLevel, minDatabaseLevel: *minDatabaseLevel, prefix: loggerPrefix}
+	l := &Logger{db: db, minConsoleLevel: *minConsoleLevel, minDatabaseLevel: *minDatabaseLevel, prefix: loggerPrefix}
+	l.Info(fmt.Sprintf("Logger created with LogLevel console=%d, database=%d", l.minConsoleLevel, l.minDatabaseLevel))
+	return l
 }
 
 func (l *Logger) SetPrefix(prefix string) {
@@ -117,5 +120,24 @@ func (l *Logger) Log(status string, message string) {
 	_, err := l.db.Exec("INSERT INTO logs (timestamp, status, message) VALUES (NOW(), $1, $2)", status, message)
 	if err != nil {
 		log.Printf("ERROR: Failed to write log to database: %v", err)
+	}
+}
+
+func GetLogLevel(logLevel string) (LogStatus, error) {
+	switch logLevel {
+	case "":
+		return defaultLevel, nil
+	case "debug":
+		return Debug, nil
+	case "info":
+		return Info, nil
+	case "warn":
+		return Warn, nil
+	case "error":
+		return Error, nil
+	case "fatal":
+		return Fatal, nil
+	default:
+		return defaultLevel, fmt.Errorf("invalid log level: %s", logLevel)
 	}
 }
