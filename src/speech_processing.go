@@ -210,7 +210,11 @@ func processSpeeches(protocol *Protocol, chunkSize *int, db DBInterface, logger 
 }
 
 func processSingleProtocol(protocolId int) error {
-	db, err := sqlx.Connect("postgres", os.Getenv("DATABASE_URL"))
+	databaseURL, err := buildDatabaseURL()
+	if err != nil {
+		return fmt.Errorf("failed to build database URL: %w", err)
+	}
+	db, err := sqlx.Connect("postgres", databaseURL)
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
@@ -276,7 +280,11 @@ func getUnassignedSpeechesCount(protocolId int, db DBInterface, logger *Logger) 
 }
 
 func processNextProtocol(logger *Logger) (bool, error) {
-	db, err := sqlx.Connect("postgres", os.Getenv("DATABASE_URL"))
+	databaseURL, err := buildDatabaseURL()
+	if err != nil {
+		return true, fmt.Errorf("failed to build database URL: %w", err)
+	}
+	db, err := sqlx.Connect("postgres", databaseURL)
 	if err != nil {
 		return true, fmt.Errorf("failed to connect to database: %w", err)
 	}

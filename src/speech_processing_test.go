@@ -24,7 +24,11 @@ func TestProcessSpeeches(t *testing.T) {
 		t.Fatalf("Failed to load .env.test: %v", err)
 	}
 
-	db, err := sqlx.Connect("postgres", os.Getenv("DATABASE_URL"))
+	databaseURL, err := buildDatabaseURL()
+	if err != nil {
+		t.Fatalf("Failed to build database URL: %v", err)
+	}
+	db, err := sqlx.Connect("postgres", databaseURL)
 	if err != nil {
 		t.Fatalf("Failed to connect to database: %v", err)
 	}
