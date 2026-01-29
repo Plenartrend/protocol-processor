@@ -175,6 +175,12 @@ func processSpeeches(protocol *Protocol, chunkSize *int, db DBInterface, logger 
 				continue
 			}
 
+			if len(fullSpeech) > 50_000 {
+				logger.Warn(fmt.Sprintf("Complete speech for Speaker %s (length=%d) is too long, skipping (max length is 50,000 characters)", speech.Speaker, len(fullSpeech)))
+				unmatchedSpeechesCount++
+				continue
+			}
+
 			logger.Info(fmt.Sprintf("Complete speech for Speaker %s (length=%d)", speech.Speaker, len(fullSpeech)))
 			err = addTextToActivity(protocolId, speech.Speaker, speech.GivenToProtocol, fullSpeech, db, logger)
 			if err != nil {

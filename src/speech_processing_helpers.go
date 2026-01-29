@@ -100,24 +100,35 @@ const (
 )
 
 func findBestMatch(needle string, haystack string, maxDistanceRatio float64, direction findBestMatchDirection, logger *Logger) (startIdx int, found bool) {
+	indices, found := findBestMatches(needle, haystack, maxDistanceRatio, direction, logger)
+	if !found || len(indices) == 0 {
+		return -1, false
+	}
+	if len(indices) > 1 {
+		return -2, true // Special value to indicate multiple matches
+	}
+	return indices[0], true
+}
+
+func findBestMatches(needle string, haystack string, maxDistanceRatio float64, direction findBestMatchDirection, logger *Logger) (indices []int, found bool) {
 	startTime := time.Now()
 	needleLen := len(needle)
 	haystackLen := len(haystack)
 
-	logger.Debug(fmt.Sprintf("findBestMatch called: needleLen=%d, haystackLen=%d, maxDistanceRatio=%.2f, direction=%v", needleLen, haystackLen, maxDistanceRatio, direction))
+	logger.Debug(fmt.Sprintf("findBestMatches called: needleLen=%d, haystackLen=%d, maxDistanceRatio=%.2f, direction=%v", needleLen, haystackLen, maxDistanceRatio, direction))
 
 	if needleLen == 0 || needleLen > haystackLen {
-		logger.Warn(fmt.Sprintf("findBestMatch: invalid input (needleLen=%d, haystackLen=%d). Needle:\n%s", needleLen, haystackLen, needle))
-		return -1, false
+		logger.Warn(fmt.Sprintf("findBestMatches: invalid input (needleLen=%d, haystackLen=%d). Needle:\n%s", needleLen, haystackLen, needle))
+		return nil, false
 	}
 
 	maxDistance := int(float64(needleLen) * maxDistanceRatio)
 	words := strings.Fields(needle)
 
-	// Helper function to evaluate candidates and return best match
-	evaluateCandidates := func(matchPositions []int, numWordsUsed int, wordsRemovedFromFront int, removedPrefixLen int) (int, int, bool) {
+	// Helper function to evaluate candidates and return best matches (may be multiple with same distance)
+	evaluateCandidates := func(matchPositions []int, numWordsUsed int, wordsRemovedFromFront int, removedPrefixLen int) ([]int, int, bool) {
 		bestDistance := math.MaxInt
-		bestIdx := -1
+		var bestIndices []int
 
 		for _, matchPos := range matchPositions {
 			// If we removed words from the front, adjust the position back
@@ -141,19 +152,23 @@ func findBestMatch(needle string, haystack string, maxDistanceRatio float64, dir
 
 			if distance < bestDistance {
 				bestDistance = distance
-				bestIdx = adjustedPos
+				bestIndices = []int{adjustedPos}
+			} else if distance == bestDistance {
+				bestIndices = append(bestIndices, adjustedPos)
 			}
 
-			// Early exit on exact match
+			// Early exit on exact match (but keep looking for other exact matches)
 			if distance == 0 {
-				return bestIdx, bestDistance, true
+				// Continue to find all exact matches
 			}
 		}
 
-		return bestIdx, bestDistance, false
+		// Check if all matches are exact (distance 0)
+		isExact := bestDistance == 0
+		return bestIndices, bestDistance, isExact
 	}
 
-	var bestIdx = -1
+	var bestIndices []int
 	var bestDistance = math.MaxInt
 	var matchPositions []int
 	var numWordsUsed int
@@ -164,90 +179,105 @@ func findBestMatch(needle string, haystack string, maxDistanceRatio float64, dir
 	if direction == removeFromEndFirst {
 		matchPositions, numWordsUsed = tryRemoveFromEnd(words, haystack, logger)
 		if len(matchPositions) > 0 {
-			idx, dist, exact := evaluateCandidates(matchPositions, numWordsUsed, 0, 0)
-			if exact || (idx >= 0 && dist <= maxDistance) {
+			indices, dist, exact := evaluateCandidates(matchPositions, numWordsUsed, 0, 0)
+			if exact || (len(indices) > 0 && dist <= maxDistance) {
 				if exact {
 					duration := time.Since(startTime)
-					logger.Debug(fmt.Sprintf("findBestMatch: exact match found at index %d in %v", idx, duration))
-					return idx, true
+					logger.Debug(fmt.Sprintf("findBestMatches: %d exact match(es) found in %v", len(indices), duration))
+					return indices, true
 				}
-				bestIdx, bestDistance = idx, dist
+				bestIndices, bestDistance = indices, dist
 			}
 		}
 		// If no good match found, try the other direction
-		if bestIdx == -1 || bestDistance > maxDistance {
-			logger.Debug("findBestMatch: no acceptable matches by removing from end, trying to remove from front")
+		if len(bestIndices) == 0 || bestDistance > maxDistance {
+			logger.Debug("findBestMatches: no acceptable matches by removing from end, trying to remove from front")
 			matchPositions, numWordsUsed, wordsRemovedFromFront, removedPrefixLen = tryRemoveFromStart(words, haystack, logger)
 			if len(matchPositions) > 0 {
-				idx, dist, exact := evaluateCandidates(matchPositions, numWordsUsed, wordsRemovedFromFront, removedPrefixLen)
+				indices, dist, exact := evaluateCandidates(matchPositions, numWordsUsed, wordsRemovedFromFront, removedPrefixLen)
 				if exact {
 					duration := time.Since(startTime)
-					logger.Debug(fmt.Sprintf("findBestMatch: exact match found at index %d in %v", idx, duration))
-					return idx, true
+					logger.Debug(fmt.Sprintf("findBestMatches: %d exact match(es) found in %v", len(indices), duration))
+					return indices, true
 				}
-				if idx >= 0 && (bestIdx == -1 || dist < bestDistance) {
-					bestIdx, bestDistance = idx, dist
+				if len(indices) > 0 && (len(bestIndices) == 0 || dist < bestDistance) {
+					bestIndices, bestDistance = indices, dist
 				}
 			}
 		}
 	} else {
 		matchPositions, numWordsUsed, wordsRemovedFromFront, removedPrefixLen = tryRemoveFromStart(words, haystack, logger)
 		if len(matchPositions) > 0 {
-			idx, dist, exact := evaluateCandidates(matchPositions, numWordsUsed, wordsRemovedFromFront, removedPrefixLen)
-			if exact || (idx >= 0 && dist <= maxDistance) {
+			indices, dist, exact := evaluateCandidates(matchPositions, numWordsUsed, wordsRemovedFromFront, removedPrefixLen)
+			if exact || (len(indices) > 0 && dist <= maxDistance) {
 				if exact {
 					duration := time.Since(startTime)
-					logger.Debug(fmt.Sprintf("findBestMatch: exact match found at index %d in %v", idx, duration))
-					return idx, true
+					logger.Debug(fmt.Sprintf("findBestMatches: %d exact match(es) found in %v", len(indices), duration))
+					return indices, true
 				}
-				bestIdx, bestDistance = idx, dist
+				bestIndices, bestDistance = indices, dist
 			}
 		}
 		// If no good match found, try the other direction
-		if bestIdx == -1 || bestDistance > maxDistance {
-			logger.Debug("findBestMatch: no acceptable matches by removing from front, trying to remove from end")
+		if len(bestIndices) == 0 || bestDistance > maxDistance {
+			logger.Debug("findBestMatches: no acceptable matches by removing from front, trying to remove from end")
 			matchPositions, numWordsUsed = tryRemoveFromEnd(words, haystack, logger)
 			if len(matchPositions) > 0 {
-				idx, dist, exact := evaluateCandidates(matchPositions, numWordsUsed, 0, 0)
+				indices, dist, exact := evaluateCandidates(matchPositions, numWordsUsed, 0, 0)
 				if exact {
 					duration := time.Since(startTime)
-					logger.Debug(fmt.Sprintf("findBestMatch: exact match found at index %d in %v", idx, duration))
-					return idx, true
+					logger.Debug(fmt.Sprintf("findBestMatches: %d exact match(es) found in %v", len(indices), duration))
+					return indices, true
 				}
-				if idx >= 0 && (bestIdx == -1 || dist < bestDistance) {
-					bestIdx, bestDistance = idx, dist
+				if len(indices) > 0 && (len(bestIndices) == 0 || dist < bestDistance) {
+					bestIndices, bestDistance = indices, dist
 				}
 			}
 		}
 	}
 
 	// Last resort - try middle words
-	if bestIdx == -1 || bestDistance > maxDistance {
-		logger.Debug("findBestMatch: no acceptable matches by removing from end or front, trying 3 middle words")
+	if len(bestIndices) == 0 || bestDistance > maxDistance {
+		logger.Debug("findBestMatches: no acceptable matches by removing from end or front, trying 3 middle words")
 		matchPositions, numWordsUsed, wordsRemovedFromFront, removedPrefixLen = tryMiddle(words, haystack, logger)
 		if len(matchPositions) > 0 {
-			idx, dist, exact := evaluateCandidates(matchPositions, numWordsUsed, wordsRemovedFromFront, removedPrefixLen)
+			indices, dist, exact := evaluateCandidates(matchPositions, numWordsUsed, wordsRemovedFromFront, removedPrefixLen)
 			if exact {
 				duration := time.Since(startTime)
-				logger.Debug(fmt.Sprintf("findBestMatch: exact match found at index %d in %v", idx, duration))
-				return idx, true
+				logger.Debug(fmt.Sprintf("findBestMatches: %d exact match(es) found in %v", len(indices), duration))
+				return indices, true
 			}
-			if idx >= 0 && (bestIdx == -1 || dist < bestDistance) {
-				bestIdx, bestDistance = idx, dist
+			if len(indices) > 0 && (len(bestIndices) == 0 || dist < bestDistance) {
+				bestIndices, bestDistance = indices, dist
 			}
 		}
 	}
 
 	// Check if we found an acceptable match
-	if bestIdx >= 0 && bestDistance <= maxDistance {
+	if len(bestIndices) > 0 && bestDistance <= maxDistance {
 		duration := time.Since(startTime)
-		logger.Debug(fmt.Sprintf("findBestMatch: fuzzy match found at index %d with distance %d in %v", bestIdx, bestDistance, duration))
-		return bestIdx, true
+		logger.Debug(fmt.Sprintf("findBestMatches: %d fuzzy match(es) found with distance %d in %v", len(bestIndices), bestDistance, duration))
+		return bestIndices, true
 	}
 
 	duration := time.Since(startTime)
-	logger.Warn(fmt.Sprintf("findBestMatch: no acceptable match found (bestDistance=%d > maxDistance=%d) in %v. Needle:\n%s\n", bestDistance, maxDistance, duration, needle))
-	return -1, false
+	logger.Warn(fmt.Sprintf("findBestMatches: no acceptable match found (bestDistance=%d > maxDistance=%d) in %v. Needle:\n%s\n", bestDistance, maxDistance, duration, needle))
+	return nil, false
+}
+
+// findAllExactMatches finds all occurrences of a substring in a string
+func findAllExactMatches(needle string, haystack string) []int {
+	var positions []int
+	start := 0
+	for {
+		idx := strings.Index(haystack[start:], needle)
+		if idx == -1 {
+			break
+		}
+		positions = append(positions, start+idx)
+		start = start + idx + 1
+	}
+	return positions
 }
 
 func getSpeechByStartAndEnd(firstSentences string, lastSentences string, protocol *Protocol, logger *Logger) (string, error) {
@@ -258,42 +288,69 @@ func getSpeechByStartAndEnd(firstSentences string, lastSentences string, protoco
 
 	text := protocol.Text
 
-	// Try exact match first
-	startIdx := strings.Index(text, firstSentences)
-	if startIdx == -1 {
-		// Fall back to fuzzy matching with 30% tolerance
+	// Find all exact matches for start
+	startMatches := findAllExactMatches(firstSentences, text)
+	var startIdx int
+
+	if len(startMatches) > 1 {
+		logger.Warn(fmt.Sprintf("Found %d exact matches for start text, cannot determine which speech to use (skipping). Start text:\n%s", len(startMatches), firstSentences))
+		return "", fmt.Errorf("multiple matches found for start of speech - ambiguous")
+	} else if len(startMatches) == 1 {
+		startIdx = startMatches[0]
+		logger.Debug(fmt.Sprintf("Found single exact match for start at index %d", startIdx))
+	} else {
+		// Fall back to fuzzy matching with 25% tolerance
 		// For the beginning of a speech, try removing from end first (we have the start, so end might be cut off)
 		logger.Debug("Exact match failed for start, trying fuzzy match")
 		var found bool
-		startIdx, found = findBestMatch(firstSentences, text, 0.25, removeFromEndFirst, logger) //TODO: test with 0.20
+		startIdx, found = findBestMatch(firstSentences, text, 0.25, removeFromEndFirst, logger)
 		if !found {
-			// Log detailed information for debugging - this is expected to happen sometimes
 			logger.Warn(fmt.Sprintf("No match found for start (skipping speech). Start text:\n%s\nEnd text:\n%s", firstSentences, lastSentences))
 			return "", fmt.Errorf("could not find start of speech - skipping")
+		}
+		if startIdx == -2 {
+			logger.Warn(fmt.Sprintf("Found multiple equally good fuzzy matches for start text, cannot determine which speech to use (skipping). Start text:\n%s", firstSentences))
+			return "", fmt.Errorf("multiple fuzzy matches found for start of speech - ambiguous")
 		}
 		logger.Info(fmt.Sprintf("Found fuzzy match for start at index %d", startIdx))
 	}
 
 	// Search for end only after the start
 	endSearchText := text[startIdx:]
-	endIdx := strings.LastIndex(endSearchText, lastSentences)
+	endMatches := findAllExactMatches(lastSentences, endSearchText)
+	var endIdx int
 
-	if endIdx == -1 {
+	if len(endMatches) > 0 {
+		// Take the first match (closest to start, shortest speech)
+		endIdx = endMatches[0]
+		if len(endMatches) > 1 {
+			logger.Debug(fmt.Sprintf("Found %d exact matches for end text, taking first (closest to start) at relative index %d", len(endMatches), endIdx))
+		} else {
+			logger.Debug(fmt.Sprintf("Found single exact match for end at relative index %d", endIdx))
+		}
+	} else {
 		// Fall back to fuzzy matching for end
 		// For the end of a speech, try removing from start first (we have the end, so start might be cut off)
 		logger.Debug("Exact match failed for end, trying fuzzy match")
 		var found bool
 		endIdx, found = findBestMatch(lastSentences, endSearchText, 0.25, removeFromStartFirst, logger)
 		if !found {
-			// Log detailed information for debugging - this is expected to happen sometimes
-			protocolPreview := endSearchText
-			if len(protocolPreview) > 1000 {
-				protocolPreview = protocolPreview[:1000] + "..."
-			}
 			logger.Warn(fmt.Sprintf("No match found for end (skipping speech). Start text:\n%s\nEnd text:\n%s", firstSentences, lastSentences))
 			return "", fmt.Errorf("could not find end of speech - skipping")
 		}
-		logger.Info(fmt.Sprintf("Found fuzzy match for end at relative index %d", endIdx))
+		if endIdx == -2 {
+			// Multiple fuzzy matches for end - take the first one (closest to start, shortest speech)
+			endIndices, _ := findBestMatches(lastSentences, endSearchText, 0.25, removeFromStartFirst, logger)
+			if len(endIndices) > 0 {
+				endIdx = endIndices[0]
+				logger.Info(fmt.Sprintf("Found %d equally good fuzzy matches for end, taking first (closest to start) at relative index %d", len(endIndices), endIdx))
+			} else {
+				logger.Warn(fmt.Sprintf("No match found for end (skipping speech). Start text:\n%s\nEnd text:\n%s", firstSentences, lastSentences))
+				return "", fmt.Errorf("could not find end of speech - skipping")
+			}
+		} else {
+			logger.Info(fmt.Sprintf("Found fuzzy match for end at relative index %d", endIdx))
+		}
 	}
 
 	endIdx = startIdx + endIdx + len(lastSentences)
