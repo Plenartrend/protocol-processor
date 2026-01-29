@@ -378,7 +378,7 @@ func processNextProtocol(logger *Logger) (bool, error) {
 		err = processSpeeches(&protocol, &chunkSize, tx, logger)
 		if err != nil {
 			var llmErr *LLMError
-			if errors.As(err, &llmErr) && protocol.AttemptsCount > 0 { //After first attempt with llm error we retry with smaller chunksize; too large chunks may have been an issue for the llm. If it still fails, however, it does not count as attempt.
+			if errors.As(err, &llmErr) {
 				logger.Error(fmt.Sprintf("LLM error while processing protocol %d: %v. Leaving protocol as in_progress without incrementing attempts; will be retried later.", protocol.ID, llmErr))
 				continue
 			}
